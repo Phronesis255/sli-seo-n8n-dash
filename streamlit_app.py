@@ -56,7 +56,7 @@ from supabase import create_client, Client
 st.set_page_config(page_title="n8n + Supabase Demo", page_icon="⚡")
 st.title("n8n trigger + Supabase table")
 
-WEBHOOK_URL = "https://phr0nesis.app.n8n.cloud/webhook-test/25d396ce-f3ff-4376-996f-3e26bc73edb2"
+WEBHOOK_URL = "https://phr0nesis.app.n8n.cloud/webhook/25d396ce-f3ff-4376-996f-3e26bc73edb2"
 
 # ── n8n (Header Auth) ──────────────────────────────────────────────────────────
 N8N_HEADER_NAME = "streamlit0"  # fixed per your config
