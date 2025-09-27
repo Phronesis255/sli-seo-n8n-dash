@@ -6,7 +6,7 @@ from requests.auth import HTTPBasicAuth
 st.set_page_config(page_title="Trigger n8n Workflow", page_icon="⚡")
 st.title("Trigger n8n Workflow")
 
-WEBHOOK_URL = "https://phr0nesis.app.n8n.cloud/webhook-test/25d396ce-f3ff-4376-996f-3e26bc73edb2"
+WEBHOOK_URL = "https://phr0nesis.app.n8n.cloud/webhook/25d396ce-f3ff-4376-996f-3e26bc73edb2s-test/25d396ce-f3ff-4376-996f-3e26bc73edb2"
 
 username = st.secrets["username"]
 password = st.secrets["password"]
