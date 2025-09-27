@@ -8,8 +8,8 @@ st.title("Trigger n8n Workflow")
 
 WEBHOOK_URL = "https://phr0nesis.app.n8n.cloud/webhook-test/25d396ce-f3ff-4376-996f-3e26bc73edb2"
 
-username = st.secrets["n8n"]["username"]
-password = st.secrets["n8n"]["password"]
+username = st.secrets["username"]
+password = st.secrets["password"]
 
 st.write("Press the button to call the webhook and run the workflow.")
 
@@ -26,7 +26,7 @@ if st.button("Run workflow"):
             # --- If you actually used 'Header Auth' in n8n, use this instead:
             resp = requests.post(
                 WEBHOOK_URL,
-                headers={"streamlit0": st.secrets["n8n"]["password"]},
+                headers={"streamlit0": st.secrets["password"]},
                 timeout=20,
             )
 
