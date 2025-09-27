@@ -1,12 +1,11 @@
 # app.py
 import streamlit as st
 import requests
-from requests.auth import HTTPBasicAuth
+from supabase import create_client, Client
 import pandas as pd
-from st_supabase_connection import SupabaseConnection
 
-st.set_page_config(page_title="n8n + Supabase Control Panel", page_icon="⚡")
-st.title("n8n + Supabase Control Panel")
+st.set_page_config(page_title="n8n + Supabase Demo", page_icon="⚡")
+st.title("n8n trigger + Supabase table")
 
 
 WEBHOOK_URL = "https://phr0nesis.app.n8n.cloud/webhook/25d396ce-f3ff-4376-996f-3e26bc73edb2s-test/25d396ce-f3ff-4376-996f-3e26bc73edb2"
@@ -48,21 +47,29 @@ if st.button("Run workflow"):
             st.error(f"Request failed: {e}")
 st.divider()
 
-# --- Supabase table viewer ---
-st.subheader("Load rows from Supabase")
-st.caption("Reads from table `mytable` and renders a data table.")
+@st.cache_resource
+def init_supabase() -> Client:
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
+    return create_client(url, key)
 
-if st.button("Fetch table rows"):
-    with st.spinner("Querying Supabase..."):
-        try:
-            # Uses credentials from Streamlit secrets (see example below)
-            conn = st.connection("supabase", type=SupabaseConnection)
-            rows = conn.query("*", table="Cache", ttl="10m").execute()
-            data = rows.data or []
-            if not data:
-                st.info("No rows returned.")
-            else:
-                df = pd.DataFrame(data)
-                st.dataframe(df, use_container_width=True)
-        except Exception as e:
-            st.error(f"Supabase query failed: {e}")
+supabase = init_supabase()
+
+@st.cache_data(ttl=600)
+def fetch_rows(table_name: str = "mytable"):
+    # Returns a list[dict]
+    res = supabase.table(table_name).select("*").execute()
+    return res.data
+
+st.subheader("Load rows from Supabase")
+if st.button("Load rows"):
+    try:
+        rows = fetch_rows("mytable")  # change table name if needed
+        df = pd.DataFrame(rows or [])
+        if df.empty:
+            st.info("No rows found in 'mytable'.")
+        else:
+            st.caption(f"{len(df)} rows from 'mytable'")
+            st.dataframe(df, use_container_width=True)
+    except Exception as e:
+        st.error(f"Failed to fetch rows: {e}")
