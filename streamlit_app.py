@@ -62,7 +62,7 @@ WEBHOOK_URL = "https://phr0nesis.app.n8n.cloud/webhook-test/25d396ce-f3ff-4376-9
 
 # ── n8n (Header Auth) ──────────────────────────────────────────────────────────
 N8N_HEADER_NAME = "streamlit0"  # fixed per your config
-N8N_HEADER_VALUE = st.secrets["n8n"]["password"]
+N8N_HEADER_VALUE = st.secrets["password"]
 
 st.subheader("Trigger n8n workflow")
 if st.button("Run n8n workflow"):
