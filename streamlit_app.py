@@ -1,8 +1,12 @@
 # app.py
-import streamlit as st
+import ast
+import json
 import requests
-from supabase import create_client, Client
 import pandas as pd
+import streamlit as st
+from urllib.parse import urlparse
+from supabase import create_client, Client
+
 
 st.set_page_config(page_title="n8n + Supabase Demo", page_icon="⚡")
 st.title("n8n trigger + Supabase table")
@@ -47,12 +51,6 @@ if st.button("Run workflow"):
             st.error(f"Request failed: {e}")
 st.divider()
 # app.py
-import ast
-import json
-import requests
-import pandas as pd
-import streamlit as st
-from urllib.parse import urlparse
 from supabase import create_client, Client
 
 st.set_page_config(page_title="n8n + Supabase Demo", page_icon="⚡")
@@ -82,6 +80,7 @@ if st.button("Run n8n workflow"):
         except requests.RequestException as e:
             st.error(f"Request failed: {e}")
 
+st.divider()
 # ── Supabase setup ─────────────────────────────────────────────────────────────
 @st.cache_resource
 def init_supabase() -> Client:
@@ -91,28 +90,26 @@ def init_supabase() -> Client:
 
 supabase = init_supabase()
 
-@st.cache_data(ttl=600)
-def fetch_rows(table_name: str = "Cache", limit: int = 250):
-    # Returns list[dict]
-    res = supabase.table(table_name).select("*").limit(limit).execute()
+@st.cache_data(ttl=600, show_spinner=False)
+def fetch_cache(limit: int = 200, keyword_query: str | None = None):
+    q = supabase.table("Cache").select("id, keyword, fetched_at, json, AI_Summary").order("fetched_at", desc=True)
+    if keyword_query:
+        # ilike -> case-insensitive contains; adjust if you use a different operator
+        q = q.ilike("keyword", f"%{keyword_query}%")
+    res = q.limit(limit).execute()
     return res.data or []
 
-# ── JSON helpers (tolerant parser + pretty/flatten/summary) ────────────────────
+# ── Parsing helpers ────────────────────────────────────────────────────────────
 def parse_jsonish(v):
-    """
-    Return dict/list if v is JSON or a Python-literal string (single quotes).
-    Else return None.
-    """
+    """Try JSON first, then Python literal (handles single quotes)."""
     if isinstance(v, (dict, list)):
         return v
     if isinstance(v, str):
         s = v.strip()
-        # 1) Try strict JSON first
         try:
             return json.loads(s)
         except Exception:
             pass
-        # 2) Try Python literal (handles single quotes, True/False/None, etc.)
         try:
             obj = ast.literal_eval(s)
             if isinstance(obj, (dict, list)):
@@ -121,127 +118,83 @@ def parse_jsonish(v):
             pass
     return None
 
-def pretty_json_text(v, max_chars: int | None = None):
-    obj = parse_jsonish(v)
-    if obj is not None:
-        s = json.dumps(obj, indent=2, ensure_ascii=False)
-    else:
-        s = str(v)
-    if max_chars and len(s) > max_chars:
-        return s[:max_chars] + " …"
-    return s
-
-def flatten_top_level(df: pd.DataFrame, json_col: str, keys: list[str], sep="."):
-    """
-    Flatten selected top-level keys from a dict into columns: <json_col>.<key>...
-    """
-    # Parse each row to dict or {}
-    parsed = df[json_col].apply(lambda v: parse_jsonish(v) or {})
-    # Normalize all rows
-    norm = pd.json_normalize(parsed, sep=sep)
-    # Limit to chosen top-level keys (and their nested children)
-    if keys:
-        keep_cols = [c for c in norm.columns if c.split(sep)[0] in set(keys)]
-        norm = norm[keep_cols] if keep_cols else pd.DataFrame(index=norm.index)
-    # Prefix columns to avoid collisions
-    if not norm.empty:
-        norm.columns = [f"{json_col}{sep}{c}" for c in norm.columns]
-    base = df.drop(columns=[json_col], errors="ignore").reset_index(drop=True)
-    return pd.concat([base, norm.reset_index(drop=True)], axis=1)
-
-def serp_compact_rows(df: pd.DataFrame, json_col: str, topk: int = 5):
-    """Return a list of (row_index, small_df) with topk organic results: pos, title, domain."""
-    out = []
-    for i, v in df[json_col].items():
-        obj = parse_jsonish(v)
-        if not isinstance(obj, dict):
-            continue
-        org = obj.get("organic_results") or []
-        rows = []
-        for r in org[:topk]:
-            title = r.get("title")
-            link = r.get("link")
-            domain = ""
-            if link:
-                try:
-                    domain = urlparse(link).netloc.replace("www.", "")
-                except Exception:
-                    domain = link
-            rows.append({"pos": r.get("position"), "title": title, "domain": domain})
-        if rows:
-            out.append((i, pd.DataFrame(rows)))
-    return out
-
-# ── UI: load + pretty/flatten/summary for Cache.json ──────────────────────────
-st.subheader("Load rows from Supabase (Cache)")
-row_limit = st.slider("Max rows to fetch", min_value=50, max_value=2000, value=250, step=50)
-display_mode = st.radio(
-    "JSON display mode",
-    ["Pretty JSON", "Flatten selected keys", "Raw table only"],
-    index=0,
-    horizontal=True,
-)
-truncate_len = st.number_input("Preview length (chars, pretty mode)", min_value=200, max_value=10000, value=1500, step=100)
-
-if st.button("Load rows"):
+def extract_domain(url: str | None) -> str:
+    if not url:
+        return ""
     try:
-        rows = fetch_rows("Cache", limit=row_limit)
-        df = pd.DataFrame(rows)
+        netloc = urlparse(url).netloc
+        return netloc[4:] if netloc.startswith("www.") else netloc
+    except Exception:
+        return url or ""
 
-        if df.empty:
-            st.info("No rows found in 'Cache'.")
-        else:
-            # Ensure expected columns exist
-            expected_cols = {"id", "keyword", "fetched_at", "json", "AI_Summary"}
-            missing = expected_cols - set(df.columns)
-            if missing:
-                st.warning(f"Missing columns in result: {', '.join(sorted(missing))}")
+def build_serp_table(serp_obj: dict, topk: int = 5) -> pd.DataFrame:
+    """Return DataFrame with rank, title, domain, snippet for topk organic results."""
+    rows = []
+    for item in (serp_obj or {}).get("organic_results", [])[:topk]:
+        rows.append({
+            "rank": item.get("position"),
+            "title": item.get("title"),
+            "domain": extract_domain(item.get("link")),
+            "snippet": item.get("snippet"),
+        })
+    return pd.DataFrame(rows)
 
-            if display_mode == "Raw table only":
-                st.dataframe(df, use_container_width=True)
+def get_ai_summary_bits(ai_summary_val):
+    """Return (summary_100w:str|None, top_competitor_topics:list[str]|None)."""
+    obj = parse_jsonish(ai_summary_val)
+    if not isinstance(obj, dict):
+        return None, None
+    return obj.get("summary_100w"), obj.get("top_competitor_topics")
 
-            elif display_mode == "Pretty JSON":
-                df_pretty = df.copy()
-                if "json" in df_pretty.columns:
-                    df_pretty["json"] = df_pretty["json"].apply(lambda v: pretty_json_text(v, max_chars=truncate_len))
-                st.dataframe(df_pretty, use_container_width=True)
+# ── Controls ───────────────────────────────────────────────────────────────────
+col_a, col_b, col_c = st.columns([2, 1, 1])
+with col_a:
+    kw = st.text_input("Filter by keyword (optional)", placeholder="e.g., prompt engineering")
+with col_b:
+    limit = st.slider("Max rows", 50, 1000, 200, 50)
+with col_c:
+    topk = st.slider("Top K organic", 3, 10, 5, 1)
 
-                with st.expander("Per-row full JSON (untruncated)"):
-                    for i, row in df.iterrows():
-                        obj = parse_jsonish(row.get("json"))
-                        if obj is None:
-                            continue
-                        with st.expander(f"Row {i} • id={row.get('id')} • keyword={row.get('keyword')}"):
-                            st.code(json.dumps(obj, indent=2, ensure_ascii=False))
+if st.button("Load summaries", type="primary", use_container_width=True):
+    rows = fetch_cache(limit=limit, keyword_query=kw.strip() or None)
+    if not rows:
+        st.info("No rows found.")
+    else:
+        for row in rows:
+            serp = parse_jsonish(row.get("json"))
+            df = build_serp_table(serp if isinstance(serp, dict) else {}, topk=topk)
 
-                with st.expander("Optional: SERP compact summary (top 5 organic)"):
-                    compact = serp_compact_rows(df, "json", topk=5)
-                    if not compact:
-                        st.caption("No organic results found (or JSON not parsed).")
-                    else:
-                        for i, small_df in compact:
-                            row = df.loc[i]
-                            st.markdown(f"**Row {i}** • id=`{row.get('id')}` • keyword=`{row.get('keyword')}`")
-                            st.dataframe(small_df, use_container_width=True)
+            summary_100w, topics = get_ai_summary_bits(row.get("AI_Summary"))
 
-            elif display_mode == "Flatten selected keys":
-                # Probe top-level keys from first parsable row
-                top_keys = []
-                for v in df.get("json", []):
-                    obj = parse_jsonish(v)
-                    if isinstance(obj, dict):
-                        top_keys = sorted(list(obj.keys()))
-                        break
-
-                sel = st.multiselect(
-                    "Choose top-level keys from 'json' to flatten into columns",
-                    options=top_keys,
-                    default=["search_information", "organic_results"],
-                    help="Creates columns like json.search_information.total_results or json.organic_results[0].title (as nested).",
+            with st.container(border=True):
+                # Header line
+                st.markdown(
+                    f"**Keyword:** `{row.get('keyword')}` &nbsp;&nbsp; "
+                    f"**Fetched:** `{row.get('fetched_at')}` &nbsp;&nbsp; "
+                    f"**ID:** `{row.get('id')}`"
                 )
-                sep = st.text_input("Key separator for new columns", value=".", help="Used in flattened column names.")
-                df_flat = flatten_top_level(df, "json", sel, sep=sep)
-                st.dataframe(df_flat, use_container_width=True)
 
-    except Exception as e:
-        st.error(f"Failed to fetch or display rows: {e}")
+                # AI summary + topics
+                if summary_100w or topics:
+                    c1, c2 = st.columns([3, 2], vertical_alignment="top")
+                    with c1:
+                        if summary_100w:
+                            st.markdown("**AI Summary (≈100w)**")
+                            st.write(summary_100w)
+                    with c2:
+                        if topics:
+                            st.markdown("**Top competitor topics**")
+                            # Small tag-like list
+                            for t in topics:
+                                st.markdown(f"- {t}")
+                else:
+                    st.caption("No AI_Summary available for this row.")
+
+                # SERP compact table
+                if not df.empty:
+                    st.markdown("**Top results (compact)**")
+                    st.dataframe(df, use_container_width=True, hide_index=True)
+                else:
+                    st.caption("No organic results found in SERP payload.")
+
+        st.success(f"Rendered {len(rows)} row(s).")
