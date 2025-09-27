@@ -56,20 +56,20 @@ def init_supabase() -> Client:
 supabase = init_supabase()
 
 @st.cache_data(ttl=600)
-def fetch_rows(table_name: str = "mytable"):
-    # Returns a list[dict]
+def fetch_rows(table_name: str = "Cache"):
+    # Returns a list[dict]s
     res = supabase.table(table_name).select("*").execute()
     return res.data
 
 st.subheader("Load rows from Supabase")
-if st.button("Load rows"):
+if st.button("Load Rows"):
     try:
-        rows = fetch_rows("mytable")  # change table name if needed
+        rows = fetch_rows("Cache")  # change table name if needed
         df = pd.DataFrame(rows or [])
         if df.empty:
-            st.info("No rows found in 'mytable'.")
+            st.info("No rows found in 'Cache'.")
         else:
-            st.caption(f"{len(df)} rows from 'mytable'")
+            st.caption(f"{len(df)} rows from 'Cache'")
             st.dataframe(df, use_container_width=True)
     except Exception as e:
         st.error(f"Failed to fetch rows: {e}")
