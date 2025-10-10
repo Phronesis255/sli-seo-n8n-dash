@@ -4,13 +4,14 @@ import json
 import requests
 import pandas as pd
 import streamlit as st
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 from supabase import create_client, Client
 import os
 import time
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+from bs4 import BeautifulSoup
 
 
 st.set_page_config(page_title="n8n + Supabase Demo", page_icon="⚡")
@@ -53,6 +54,7 @@ password = st.secrets["password"]
 # st.divider()
 # # app.py
 from supabase import create_client, Client
+
 
 st.set_page_config(page_title="n8n + Supabase Demo", page_icon="⚡")
 st.title("n8n trigger + Supabase table")
@@ -200,8 +202,323 @@ if st.button("Load summaries", type="primary", use_container_width=True):
 
         st.success(f"Rendered {len(rows)} row(s).")
 
+def google_custom_search(query, api_key, cse_id, num_results=10, delay=1):
+    """Performs Google Custom Search with rate-limiting."""
+    all_results = []
+    start_index = 1
+    while len(all_results) < num_results:
+        remaining = num_results - len(all_results)
+        current_num = min(10, remaining)
+        url = "https://customsearch.googleapis.com/customsearch/v1"
+        params = {
+            'q': query,
+            'key': api_key,
+            'cx': cse_id,
+            'num': current_num,
+            'start': start_index,
+            'hl': 'en',
+            'cr': 'countryUS'
+        }
+        try:    
+            response = requests.get(url, params=params)
+            response.raise_for_status()
+            data = response.json()
+            items = data.get('items', [])
+            if not items:
+                break
+            all_results.extend(items)
+            start_index += current_num
+            time.sleep(delay*10)  # delay between requests
+        except requests.exceptions.RequestException as e:
+            if response.status_code == 429:
+                print("Rate limit exceeded. Retrying in 60 seconds...")
+                time.sleep(120)
+                continue
+            else:
+                print(f"Error: {e}")
+                return []
+    return all_results
+
+
+def extract_content_from_url(url, extract_headings=False, retries=2, timeout=5):
+    """Extract main textual content (paragraphs) from a webpage."""
+    headers = {
+        'User-Agent': (
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+            'AppleWebKit/537.36 (KHTML, like Gecko) '
+            'Chrome/58.0.3029.110 Safari/537.3'
+        )
+    }
+    for _ in range(retries):
+        try:
+            resp = requests.get(url, headers=headers, timeout=timeout)
+            if resp.status_code == 200:
+                soup = BeautifulSoup(resp.text, 'html.parser')
+                title = soup.title.string.strip() if soup.title and soup.title.string else "No Title"
+                headings = []
+                if extract_headings:
+                    for level in ['h2', 'h3', 'h4']:
+                        for tag in soup.find_all(level):
+                            headings.append({'level': level, 'text': tag.get_text(strip=True)})
+
+                icon_link = soup.find('link', rel=lambda x: x and ('icon' in x.lower()))
+                if icon_link and icon_link.get('href'):
+                    favicon_url = urljoin(url, icon_link['href'])
+                else:
+                    favicon_url = urljoin(url, '/favicon.ico')
+
+                paragraphs = soup.find_all('p')
+                content = ' '.join([p.get_text() for p in paragraphs])
+                return title, content.strip(), favicon_url, headings, soup
+        except requests.RequestException:
+            pass
+        time.sleep(1)
+    return None, "", "", [], None
+
+def detailed_extraction(soup, url):
+    # Clone the soup to avoid modifying the original
+    soup_clone = BeautifulSoup(str(soup), 'html.parser')
+    
+    # Remove the <footer> element and its contents so we only analyze the article content
+    footer = soup_clone.find("footer")
+    if footer:
+        footer.decompose()
+    
+    # Extract Title
+    title = soup_clone.title.string.strip() if soup_clone.title and soup_clone.title.string else "No Title"
+    
+    # Extract Meta Description
+    meta_description = None
+    meta_tag = soup_clone.find("meta", attrs={"name": "description"})
+    if meta_tag and meta_tag.get("content"):
+        meta_description = meta_tag.get("content").strip()
+    
+    # Extract main Content (using <p> tags) and count paragraphs
+    paragraphs = soup_clone.find_all("p")
+    content = " ".join([p.get_text().strip() for p in paragraphs if p.get_text().strip()])
+    num_paragraphs = len([p for p in paragraphs if p.get_text().strip()])
+    
+    # Count headings and bullet lists (only those above the removed footer)
+    num_h2 = len(soup_clone.find_all("h2"))
+    num_h3 = len(soup_clone.find_all("h3"))
+    num_bullet_lists = len(soup_clone.find_all("ul"))
+
+    return {
+        "url": url,
+        "title": title,
+        "meta_description": meta_description,
+        "content": content,
+        "num_paragraphs": num_paragraphs,
+        "num_h2": num_h2,
+        "num_h3": num_h3,
+        "num_bullet_lists": num_bullet_lists
+    }
+
+@st.cache_resource
+def lemmatize_text(text: str) -> str:
+    doc = nlp(text)
+    lemmatized_tokens = []
+    for token in doc:
+        # context-aware overrides
+        if token.text.lower() == "media" and token.lemma_.lower() == "medium":
+            lemmatized_tokens.append("media")
+        elif token.text.lower() == "data" and token.lemma_.lower() == "datum":
+            lemmatized_tokens.append("data")
+        elif token.text.lower() == "publishers" and token.lemma_.lower() == "publisher":
+            lemmatized_tokens.append("publisher")
+        else:
+            lemmatized_tokens.append(token.lemma_)
+    return ' '.join(lemmatized_tokens)
+
+
+def remove_duplicate_questions(questions, similarity_threshold=0.75):
+    # If 0 or 1 questions, there's nothing to deduplicate
+    if len(questions) < 2:
+        return questions
+
+    # Preprocess questions
+    def preprocess(text):
+        # Lowercase, remove punctuation
+        text = text.lower()
+        text = text.translate(str.maketrans('', '', string.punctuation))
+        return text
+
+    # Encode questions using SentenceTransformer
+    model = load_embedding_model()
+    preprocessed = [preprocess(q) for q in questions]
+    embeddings = model.encode(preprocessed)
+
+    # If embeddings is empty or only 1 row, again just return
+    if embeddings.shape[0] < 2:
+        return questions
+
+    # Compute cosine similarity matrix
+    similarity_matrix = cosine_similarity(embeddings)
+
+    # Cluster questions
+    clustering_model = AgglomerativeClustering(
+        n_clusters=None,
+        affinity='precomputed',
+        linkage='complete',
+        distance_threshold=1 - similarity_threshold
+    )
+    clustering_model.fit(1 - similarity_matrix)
+
+    # Select a representative question from each cluster
+    cluster_labels = clustering_model.labels_
+    cluster_map = {}
+    for idx, label in enumerate(cluster_labels):
+        cluster_map.setdefault(label, []).append(questions[idx])
+
+    final_questions = []
+    for _, qs in cluster_map.items():
+        # pick the shortest question from the cluster
+        rep = min(qs, key=len)
+        final_questions.append(rep)
+
+    return final_questions
+
+
+def extract_brand_name(url, title):
+    parsed = urlparse(url)
+    parts = parsed.netloc.split('.')
+    if parts and parts[0] == 'www':
+        parts.pop(0)
+    domain_root = parts[0].capitalize() if parts else 'Unknown'
+
+    if title:
+        segs = title.split(' - ')
+        for seg in reversed(segs):
+            ratio = difflib.SequenceMatcher(None, domain_root.lower(), seg.lower()).ratio()
+            if ratio > 0.8:
+                return seg.strip()
+    return domain_root
+
+@st.cache_resource
+def is_brand_mentioned(term, brand_name):
+    # direct substring
+    if brand_name.lower() in term.lower():
+        return True
+    # fuzzy match ratio
+    ratio = difflib.SequenceMatcher(
+        None,
+        term.lower().replace(' ', ''),
+        brand_name.lower().replace(' ', '')
+    ).ratio()
+    if ratio > 0.8:
+        return True
+    # check for named entity
+    doc = nlp(term)
+    for ent in doc.ents:
+        if ent.label_ in ['ORG', 'PRODUCT', 'PERSON', 'GPE']:
+            ratio_ent = difflib.SequenceMatcher(
+                None,
+                ent.text.lower().replace(' ', ''),
+                brand_name.lower().replace(' ', '')
+            ).ratio()
+            if ratio_ent > 0.8:
+                return True
+    return False
+
+
+def is_not_branded(question):
+    """Return True if question does NOT mention any brand in st.session_state['brands']"""
+    brands = st.session_state.get('brands', [])
+    for brand in brands:
+        if is_brand_mentioned(question, brand):
+            return False
+    return True
+
+# Initialize sentiment pipeline (cache as needed)
+sentiment_pipeline = pipeline(
+    "sentiment-analysis", 
+    model="distilbert-base-uncased-finetuned-sst-2-english"
+)
+
+def compute_readability(text):
+    if not text or len(text.split()) < 3:
+        return None
+    try:
+        return textstat.flesch_kincaid_grade(text)
+    except Exception:
+        return None
+
+def compute_sentiment(text):
+    text = text.strip()
+    if not text:
+        return None
+    try:
+        # If text is very long, limit to first 512 characters
+        trimmed_text = text if len(text) <= 512 else text[:512]
+        result = sentiment_pipeline(trimmed_text)
+        if result:
+            label = result[0]['label'].upper()
+            score = result[0]['score']
+            return score if label == "POSITIVE" else -score
+        else:
+            return None
+    except Exception:
+        return None
+def compute_pos_counts(text, normalize=True):
+    """Count the number of adverbs, adjectives, and verbs in the given text.
+    
+    Args:
+        text (str): The input text to analyze.
+        normalize (bool): Whether to return normalized counts. Defaults to True.
+    
+    Returns:
+        dict: A dictionary with counts of adverbs, adjectives, and verbs.
+    """
+    doc = nlp(text)
+    total_words = len([token for token in doc if token.is_alpha])  # Exclude punctuation
+
+    pos_counts = {
+        "adverbs": sum(1 for token in doc if token.pos_ == "ADV"),
+        "adjectives": sum(1 for token in doc if token.pos_ == "ADJ"),
+        "verbs": sum(1 for token in doc if token.pos_ == "VERB")
+    }
+
+    if normalize and total_words > 0:
+        for key in pos_counts:
+            pos_counts[key] /= total_words  # Normalize each POS count
+    elif normalize:
+        for key in pos_counts:
+            pos_counts[key] = 0  # Avoid division by zero
+
+    return pos_counts
+
+
+def compute_serp_features(details, position):
+    content = details.get("content", "")
+    pos_counts = compute_pos_counts(content)  # Get POS counts
+
+    features = {
+        "position": position,
+        "url": details.get("url"),
+        "title": details.get("title"),
+        "title_readability": compute_readability(details.get("title")),
+        "title_sentiment": compute_sentiment(details.get("title")),
+        "meta_readability": compute_readability(details.get("meta_description") or ""),
+        "meta_sentiment": compute_sentiment(details.get("meta_description") or ""),
+        "content_readability": compute_readability(details.get("content")),
+        "content_sentiment": compute_sentiment(details.get("content")),
+        "word_count": len(details.get("content", "").split()),
+        "num_paragraphs": details.get("num_paragraphs"),
+        "num_h2": details.get("num_h2"),
+        "num_h3": details.get("num_h3"),
+        "num_bullet_lists": details.get("num_bullet_lists"),
+        "entity_count": compute_ner_count(content),
+        "lexical_diversity": compute_lexical_diversity(content),
+        "adverbs": pos_counts["adverbs"],
+        "adjectives": pos_counts["adjectives"],
+        "verbs": pos_counts["verbs"]
+    }
+    return features
+
+
 # ── Keyword Research Workflow ─────────────────────────────────────────────────
 def perform_analysis(keyword):
+    max_contents = 20
     """Refactored function using logic consistent with the React+FastAPI version,
        but preserving EXACT st.session_state keys and formats used in the original code.
     """
@@ -309,7 +626,7 @@ def perform_analysis(keyword):
     st.write(f"Ideal Word Count: {ideal_count}")
 
     # 3) Clean and lemmatize
-    docs_lemmatized = [lemmatize_text(doc) for doc in retrieved_content]
+    docs_lemmatized = retrieved_content #[lemmatize_text(doc) for doc in retrieved_content]
     st.write(f"Lemmatized Documents: {docs_lemmatized}")
 
     # 5) Display top search results
