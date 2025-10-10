@@ -472,11 +472,13 @@ def perform_analysis(keyword):
 
     api_key = os.getenv("API_KEY")
     cse_id = os.getenv("CSE_ID")
-    st.write(f"API Key: {api_key}, CSE ID: {cse_id}")
+    if not api_key or not cse_id:
+        st.error('Google API key or CSE ID not set in environment variables.')
+        return
 
     # 1) Retrieve search items
     results = google_custom_search(keyword, api_key, cse_id, num_results=35)
-    st.write(f"Search results: {results}")
+    #st.write(f"Search results: {results}")
     if not results:
         status_placeholder.error('No results found.')
         return
