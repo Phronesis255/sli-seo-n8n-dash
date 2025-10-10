@@ -496,22 +496,22 @@ def compute_serp_features(details, position):
         "position": position,
         "url": details.get("url"),
         "title": details.get("title"),
-        "title_readability": compute_readability(details.get("title")),
-        "title_sentiment": compute_sentiment(details.get("title")),
-        "meta_readability": compute_readability(details.get("meta_description") or ""),
-        "meta_sentiment": compute_sentiment(details.get("meta_description") or ""),
-        "content_readability": compute_readability(details.get("content")),
-        "content_sentiment": compute_sentiment(details.get("content")),
+        "title_readability": [],
+        "title_sentiment": [],
+        "meta_readability": [],
+        "meta_sentiment": [],
+        "content_readability": [],
+        "content_sentiment": [],
         "word_count": len(details.get("content", "").split()),
         "num_paragraphs": details.get("num_paragraphs"),
         "num_h2": details.get("num_h2"),
         "num_h3": details.get("num_h3"),
         "num_bullet_lists": details.get("num_bullet_lists"),
-        "entity_count": compute_ner_count(content),
-        "lexical_diversity": compute_lexical_diversity(content),
-        "adverbs": pos_counts["adverbs"],
-        "adjectives": pos_counts["adjectives"],
-        "verbs": pos_counts["verbs"]
+        "entity_count": 0,
+        "lexical_diversity": [],
+        "adverbs": [],
+        "adjectives": [],
+        "verbs": []
     }
     return features
 
