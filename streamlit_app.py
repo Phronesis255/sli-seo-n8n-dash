@@ -415,3 +415,15 @@ def perform_analysis(keyword):
     elapsed_time = time.time() - start_time
     print(f"Time taken for analysis: {elapsed_time:.2f} seconds")
     st.write(f"Time taken for analysis: {elapsed_time:.2f} seconds")
+
+st.divider()
+st.subheader("Keyword Research Workflow")
+keyword = st.text_input("Enter a keyword for analysis", placeholder="e.g., AI tools")
+
+if st.button("Analyze Keyword"):
+    if keyword.strip():
+        perform_analysis(keyword.strip())
+    else:
+        st.error("Please enter a valid keyword.")
+
+# Display analysis results if available
