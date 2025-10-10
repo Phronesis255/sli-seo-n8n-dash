@@ -206,26 +206,28 @@ if st.button("Load summaries", type="primary", use_container_width=True):
 
 # ── Keyword Research Workflow ─────────────────────────────────────────────────
 def perform_analysis(keyword):
-    """Perform keyword research analysis."""
+    """Refactored function using logic consistent with the React+FastAPI version,
+       but preserving EXACT st.session_state keys and formats used in the original code.
+    """
     if 'words_to_check' not in st.session_state:
         st.session_state['words_to_check'] = []
 
     start_time = time.time()
-    user_email = st.session_state.get("username", "guest")
+    user_email = st.session_state.get("username", "guest")  # or "user_id" if you have it
 
-    status_placeholder = st.empty()
+    status_placeholder = st.empty()  # Create a placeholder for dynamic updates
     status_placeholder.info('Retrieving top search results...')
     st.write(f"Keyword: {keyword}")
 
     st.session_state['keyword'] = keyword
-    st.session_state['serp_contents'] = []
+    st.session_state['serp_contents'] = []  # NEW: store structured data
 
     api_key = os.getenv("API_KEY")
     cse_id = os.getenv("CSE_ID")
     st.write(f"API Key: {api_key}, CSE ID: {cse_id}")
 
-    # Simulate retrieving search results (replace with actual implementation)
-    results = [{"link": f"https://example.com/{i}"} for i in range(1, 6)]
+    # 1) Retrieve search items
+    results = google_custom_search(keyword, api_key, cse_id, num_results=35)
     st.write(f"Search results: {results}")
     if not results:
         status_placeholder.error('No results found.')
@@ -238,32 +240,182 @@ def perform_analysis(keyword):
         return
     st.session_state['top_urls'] = top_urls
 
-    # Simulate content extraction (replace with actual implementation)
-    retrieved_content = ["Sample content from URL"] * len(top_urls)
-    st.session_state['serp_contents'] = [{"url": url, "content": content} for url, content in zip(top_urls, retrieved_content)]
+    # 2) Extract content from top URLs
+    titles, favicons, retrieved_content = [], [], []
+    headings_data = []
+    successful_urls = []
+    word_counts = []
+    brand_names = set()
 
-    # Simulate TF-IDF analysis (replace with actual implementation)
-    terms = ["term1", "term2", "term3"]
-    scores = [0.8, 0.6, 0.4]
+    progress = st.progress(0)
+    for idx, url in enumerate(top_urls):
+        if len(retrieved_content) >= max_contents:
+            break
+        print(f"\nProcessing URL {idx+1}/{len(top_urls)}: {url}")
+        progress.progress(idx / len(top_urls))
+        status_placeholder.info(f"Retrieving content from {url}...")
+        t, content, favicon_url, heads, soup = extract_content_from_url(url, extract_headings=True)
+        st.write(f"URL: {url}, Title: {t}, Content Length: {len(content) if content else 0}")
+        if t is None:
+            t = "No Title"
+
+        # brand
+        print("Filtering branded content")
+        brand_name = extract_brand_name(url, t)
+        brand_names.add(brand_name)
+
+        if heads:
+            for h in heads:
+                if 'text' in h:
+                    headings_data.append({
+                        'text': h['text'].strip(),
+                        'url': url,
+                        'title': t
+                    })
+
+        if content:
+            wc = len(content.split())
+            retrieved_content.append(content)
+            successful_urls.append(url)
+            titles.append(t)
+            favicons.append(favicon_url)
+            # anchor word count at least 1000
+            word_counts.append(wc if wc > 1000 else 1000)
+            st.session_state['serp_contents'].append({
+                "position": idx + 1,      # 1-based SERP rank
+                "url": url,
+                "title": t,
+                "content": content,
+                "favicon": favicon_url,
+                "word_counts": wc if wc > 1000 else 1000,
+                "soup": soup
+            })
+        time.sleep(0.5)
+    st.session_state['successful_urls'] = successful_urls
+    progress.empty()
+    status_placeholder.empty()  # Remove the last message after completion
+    st.write(f"Retrieved Content: {retrieved_content}")
+    st.write(f"Successful URLs: {successful_urls}")
+    st.write(f"Brand Names: {brand_names}")
+
+    # store brand names
+    st.session_state['brands'] = list(brand_names)
+
+    if not retrieved_content:
+        st.error('Failed to retrieve sufficient content.')
+        return
+
+    if len(word_counts) > 0:
+        ideal_count = int(np.median(word_counts)) + 500
+    else:
+        ideal_count = 1000
+    st.session_state['ideal_word_count'] = ideal_count
+    st.write(f"Ideal Word Count: {ideal_count}")
+
+    # 3) Clean and lemmatize
+    docs_lemmatized = [lemmatize_text(doc) for doc in retrieved_content]
+    st.write(f"Lemmatized Documents: {docs_lemmatized}")
+
+    # 5) Display top search results
+    st.subheader('Top Search Results')
+    for i in range(len(titles)):
+        fc = favicons[i]
+        t = titles[i]
+        link = successful_urls[i]
+        wc = word_counts[i]
+        st.markdown(
+            f"""
+            <div style="background-color: white; padding: 10px; border-radius: 5px; margin-bottom: 10px; color: black;">
+                <div style="display: flex; align-items: center;">
+                    <img src="{fc}" width="32" style="margin-right: 10px;">
+                    <div>
+                        <strong>{t}</strong> ({wc} words)<br>
+                        <a href="{link}" target="_blank">{link}</a>
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True
+        )
+
+    lower_bound = (ideal_count // 500) * 500
+    upper_bound = lower_bound + 500
+    st.success(f"**Suggested Word Count:** Aim for approx. {lower_bound}–{upper_bound} words based on top content.")
+
+    print("Starting TF-IDF operations")
+
+    # 6) TF-IDF + CountVectorizer
+    model = load_embedding_model()
+    tfidf_vectorizer = TfidfVectorizer(ngram_range=(1,3))
+    tf_vectorizer    = CountVectorizer(ngram_range=(1,3))
+
+    tfidf_matrix = tfidf_vectorizer.fit_transform(docs_lemmatized).toarray()
+    tf_matrix    = tf_vectorizer.fit_transform(docs_lemmatized).toarray()
+
+    feature_names = tfidf_vectorizer.get_feature_names_out()
+    filtered_feats = filter_terms(feature_names)
+    st.write(f"Filtered Features: {filtered_feats}")
+
+    # filter the matrices
+    idxs = [i for i, term in enumerate(feature_names) if term in filtered_feats]
+    tfidf_matrix_f = tfidf_matrix[:, idxs]
+    tf_matrix_f    = tf_matrix[:, idxs]
+    filtered_feature_names = [feature_names[i] for i in idxs]
+
+    # compute average
+    avg_tfidf = np.mean(tfidf_matrix_f, axis=0)
+    avg_tf    = np.mean(tf_matrix_f, axis=0)
+    # also track doc lengths
+    doc_word_counts = [len(d.split()) for d in docs_lemmatized]
+    avg_doc_len = float(sum(doc_word_counts)) / max(1, len(doc_word_counts))
+
+    # normalizing
+    avg_tfidf /= avg_doc_len
+    avg_tf    /= avg_doc_len
+
+    print("Generating embeddings...")
+    st.info("Indexing results... Generating embeddings...")
+    # 7) Now compute similarity for each term to the user keyword
+    keyword_emb = model.encode([keyword])[0]
+    term_embeddings = model.encode(filtered_feature_names)
+    similarities = cosine_similarity([keyword_emb], term_embeddings)[0]
+
+    # "Combined Score" = average tf-idf * similarity
+    combined_scores = avg_tfidf * similarities
+
+    # get top 50
+    N = 50
+    top_idx = np.argsort(combined_scores)[-N:][::-1]
+    top_terms = [filtered_feature_names[i] for i in top_idx]
+    top_combined = [combined_scores[i] for i in top_idx]
+    top_tfidf    = [avg_tfidf[i] for i in top_idx]
+    top_tf       = [avg_tf[i] for i in top_idx]
+    top_sim      = [similarities[i] for i in top_idx]
+
+    st.write(f"Top Terms: {top_terms}")
+    st.write(f"Top Combined Scores: {top_combined}")
+    st.write(f"Top TF-IDF Scores: {top_tfidf}")
+    st.write(f"Top TF Scores: {top_tf}")
+    st.write(f"Top Similarities: {top_sim}")
+
+    # 8) Store in session_state
     st.session_state['chart_data'] = pd.DataFrame({
-        'Terms': terms,
-        'Scores': scores
+        'Terms': top_terms,
+        'Combined Score': top_combined,
+        'Average TF-IDF Score': [x * 100 for x in top_tfidf],
+        'Similarity to Keyword': [x * 100 for x in top_sim]
     })
 
-    st.success(f"Analysis completed for keyword: {keyword}")
+    st.session_state['words_to_check'] = [
+        {
+            'Term': top_terms[i],
+            'Average TF Score': top_tf[i],
+            'Average TF-IDF Score': top_tfidf[i]
+        }
+        for i in range(len(top_terms))
+    ]
+
+    st.session_state['analysis_completed'] = True
+
     elapsed_time = time.time() - start_time
-    st.write(f"Time taken: {elapsed_time:.2f} seconds")
-
-# ── Add Keyword Research Section ──────────────────────────────────────────────
-st.subheader("Keyword Research Workflow")
-keyword = st.text_input("Enter a keyword for research", placeholder="e.g., AI tools")
-if st.button("Analyze Keyword"):
-    if keyword.strip():
-        perform_analysis(keyword.strip())
-    else:
-        st.error("Please enter a valid keyword.")
-
-# Display analysis results
-if 'chart_data' in st.session_state:
-    st.subheader("Keyword Analysis Results")
-    st.dataframe(st.session_state['chart_data'], use_container_width=True)
+    print(f"Time taken for analysis: {elapsed_time:.2f} seconds")
+    st.write(f"Time taken for analysis: {elapsed_time:.2f} seconds")
