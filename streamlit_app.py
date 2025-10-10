@@ -321,69 +321,6 @@ def detailed_extraction(soup, url):
         "num_bullet_lists": num_bullet_lists
     }
 
-@st.cache_resource
-def lemmatize_text(text: str) -> str:
-    doc = nlp(text)
-    lemmatized_tokens = []
-    for token in doc:
-        # context-aware overrides
-        if token.text.lower() == "media" and token.lemma_.lower() == "medium":
-            lemmatized_tokens.append("media")
-        elif token.text.lower() == "data" and token.lemma_.lower() == "datum":
-            lemmatized_tokens.append("data")
-        elif token.text.lower() == "publishers" and token.lemma_.lower() == "publisher":
-            lemmatized_tokens.append("publisher")
-        else:
-            lemmatized_tokens.append(token.lemma_)
-    return ' '.join(lemmatized_tokens)
-
-
-def remove_duplicate_questions(questions, similarity_threshold=0.75):
-    # If 0 or 1 questions, there's nothing to deduplicate
-    if len(questions) < 2:
-        return questions
-
-    # Preprocess questions
-    def preprocess(text):
-        # Lowercase, remove punctuation
-        text = text.lower()
-        text = text.translate(str.maketrans('', '', string.punctuation))
-        return text
-
-    # Encode questions using SentenceTransformer
-    model = load_embedding_model()
-    preprocessed = [preprocess(q) for q in questions]
-    embeddings = model.encode(preprocessed)
-
-    # If embeddings is empty or only 1 row, again just return
-    if embeddings.shape[0] < 2:
-        return questions
-
-    # Compute cosine similarity matrix
-    similarity_matrix = cosine_similarity(embeddings)
-
-    # Cluster questions
-    clustering_model = AgglomerativeClustering(
-        n_clusters=None,
-        affinity='precomputed',
-        linkage='complete',
-        distance_threshold=1 - similarity_threshold
-    )
-    clustering_model.fit(1 - similarity_matrix)
-
-    # Select a representative question from each cluster
-    cluster_labels = clustering_model.labels_
-    cluster_map = {}
-    for idx, label in enumerate(cluster_labels):
-        cluster_map.setdefault(label, []).append(questions[idx])
-
-    final_questions = []
-    for _, qs in cluster_map.items():
-        # pick the shortest question from the cluster
-        rep = min(qs, key=len)
-        final_questions.append(rep)
-
-    return final_questions
 
 
 def extract_brand_name(url, title):
@@ -401,33 +338,6 @@ def extract_brand_name(url, title):
                 return seg.strip()
     return domain_root
 
-@st.cache_resource
-def is_brand_mentioned(term, brand_name):
-    # direct substring
-    if brand_name.lower() in term.lower():
-        return True
-    # fuzzy match ratio
-    ratio = difflib.SequenceMatcher(
-        None,
-        term.lower().replace(' ', ''),
-        brand_name.lower().replace(' ', '')
-    ).ratio()
-    if ratio > 0.8:
-        return True
-    # check for named entity
-    doc = nlp(term)
-    for ent in doc.ents:
-        if ent.label_ in ['ORG', 'PRODUCT', 'PERSON', 'GPE']:
-            ratio_ent = difflib.SequenceMatcher(
-                None,
-                ent.text.lower().replace(' ', ''),
-                brand_name.lower().replace(' ', '')
-            ).ratio()
-            if ratio_ent > 0.8:
-                return True
-    return False
-
-# Initialize sentiment pipeline (cache as needed)
 
 
 
@@ -457,7 +367,35 @@ def compute_serp_features(details, position):
     }
     return features
 
+def filter_terms(terms):
+    """Filter out numeric, stopword, or other low-value tokens."""
+    custom_stopwords = set([
+        "i", "me", "my", "myself", "we", "our", "ours", "ourselves", "you", "your", "way", "yours",
+        "yourself", "yourselves", "he", "him", "his", "himself", "she", "her", "hers", "herself",
+        "it", "its", "itself", "they", "them", "their", "theirs", "themselves", "what", "which", "who",
+        "whom", "this", "that", "these", "those", "am", "is", "are", "was", "were", "be", "been", "being",
+        "have", "has", "had", "having", "do", "does", "did", "doing", "a", "an", "the", "and", "but", "if", "or",
+        "because", "as", "until", "while", "of", "at", "by", "for", "with", "about", "against", "between", "into",
+        "through", "during", "before", "after", "above", "below", "to", "from", "up", "down", "in", "out", "on", "off",
+        "over", "under", "again", "further", "then", "once", "here", "there", "when", "where", "why", "how", "all",
+        "any", "both", "each", "few", "more", "most", "other", "some", "such", "no", "nor", "not", "only", "own", "same",
+        "so", "than", "too", "very", "s", "t", "can", "will", "just", "don", "should", "now", "like", "need"
+    ])
 
+    filtered = []
+    seen = set()
+    for term in terms:
+        # Skip terms containing digits
+        if any(ch.isdigit() for ch in term):
+            continue
+        # Skip terms that are in the custom stopwords list
+        if term.lower() in custom_stopwords:
+            continue
+        # Avoid duplicates
+        if term not in seen:
+            filtered.append(term)
+            seen.add(term)
+    return filtered
 # ── Keyword Research Workflow ─────────────────────────────────────────────────
 def perform_analysis(keyword):
     max_contents = 20
