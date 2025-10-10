@@ -13,6 +13,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from bs4 import BeautifulSoup
 import difflib
+from sentence_transformers import SentenceTransformer
 
 
 st.set_page_config(page_title="n8n + Supabase Demo", page_icon="⚡")
@@ -275,6 +276,11 @@ def extract_content_from_url(url, extract_headings=False, retries=2, timeout=5):
             pass
         time.sleep(1)
     return None, "", "", [], None
+
+@st.cache_resource
+def load_embedding_model():
+    return SentenceTransformer('all-MiniLM-L6-v2')
+
 
 def detailed_extraction(soup, url):
     # Clone the soup to avoid modifying the original

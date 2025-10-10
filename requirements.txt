@@ -4,3 +4,4 @@ pandas
 supabase
 scikit-learn
 bs4 
+sentence_transformers
