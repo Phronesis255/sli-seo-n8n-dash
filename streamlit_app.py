@@ -490,7 +490,6 @@ def compute_pos_counts(text, normalize=True):
 
 def compute_serp_features(details, position):
     content = details.get("content", "")
-    pos_counts = compute_pos_counts(content)  # Get POS counts
 
     features = {
         "position": position,
