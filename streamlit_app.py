@@ -420,72 +420,8 @@ def is_brand_mentioned(term, brand_name):
                 return True
     return False
 
-
-def is_not_branded(question):
-    """Return True if question does NOT mention any brand in st.session_state['brands']"""
-    brands = st.session_state.get('brands', [])
-    for brand in brands:
-        if is_brand_mentioned(question, brand):
-            return False
-    return True
-
 # Initialize sentiment pipeline (cache as needed)
-sentiment_pipeline = pipeline(
-    "sentiment-analysis", 
-    model="distilbert-base-uncased-finetuned-sst-2-english"
-)
 
-def compute_readability(text):
-    if not text or len(text.split()) < 3:
-        return None
-    try:
-        return textstat.flesch_kincaid_grade(text)
-    except Exception:
-        return None
-
-def compute_sentiment(text):
-    text = text.strip()
-    if not text:
-        return None
-    try:
-        # If text is very long, limit to first 512 characters
-        trimmed_text = text if len(text) <= 512 else text[:512]
-        result = sentiment_pipeline(trimmed_text)
-        if result:
-            label = result[0]['label'].upper()
-            score = result[0]['score']
-            return score if label == "POSITIVE" else -score
-        else:
-            return None
-    except Exception:
-        return None
-def compute_pos_counts(text, normalize=True):
-    """Count the number of adverbs, adjectives, and verbs in the given text.
-    
-    Args:
-        text (str): The input text to analyze.
-        normalize (bool): Whether to return normalized counts. Defaults to True.
-    
-    Returns:
-        dict: A dictionary with counts of adverbs, adjectives, and verbs.
-    """
-    doc = nlp(text)
-    total_words = len([token for token in doc if token.is_alpha])  # Exclude punctuation
-
-    pos_counts = {
-        "adverbs": sum(1 for token in doc if token.pos_ == "ADV"),
-        "adjectives": sum(1 for token in doc if token.pos_ == "ADJ"),
-        "verbs": sum(1 for token in doc if token.pos_ == "VERB")
-    }
-
-    if normalize and total_words > 0:
-        for key in pos_counts:
-            pos_counts[key] /= total_words  # Normalize each POS count
-    elif normalize:
-        for key in pos_counts:
-            pos_counts[key] = 0  # Avoid division by zero
-
-    return pos_counts
 
 
 def compute_serp_features(details, position):
