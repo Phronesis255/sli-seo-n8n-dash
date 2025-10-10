@@ -12,6 +12,7 @@ import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from bs4 import BeautifulSoup
+import difflib
 
 
 st.set_page_config(page_title="n8n + Supabase Demo", page_icon="⚡")
@@ -454,9 +455,6 @@ def compute_serp_features(details, position):
 # ── Keyword Research Workflow ─────────────────────────────────────────────────
 def perform_analysis(keyword):
     max_contents = 20
-    """Refactored function using logic consistent with the React+FastAPI version,
-       but preserving EXACT st.session_state keys and formats used in the original code.
-    """
     if 'words_to_check' not in st.session_state:
         st.session_state['words_to_check'] = []
 
