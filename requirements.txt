@@ -2,3 +2,4 @@ streamlit
 st-supabase-connection
 pandas
 supabase
+scikit-learn

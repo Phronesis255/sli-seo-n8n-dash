@@ -6,6 +6,11 @@ import pandas as pd
 import streamlit as st
 from urllib.parse import urlparse
 from supabase import create_client, Client
+import os
+import time
+import numpy as np
+from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
 
 st.set_page_config(page_title="n8n + Supabase Demo", page_icon="⚡")
@@ -62,25 +67,25 @@ WEBHOOK_URL = "https://phr0nesis.app.n8n.cloud/webhook/25d396ce-f3ff-4376-996f-3
 N8N_HEADER_NAME = "streamlit0"  # fixed per your config
 N8N_HEADER_VALUE = st.secrets["password"]
 
-st.subheader("Trigger n8n workflow")
-if st.button("Run n8n workflow"):
-    with st.spinner("Triggering workflow..."):
-        try:
-            resp = requests.post(
-                WEBHOOK_URL,
-                headers={N8N_HEADER_NAME: N8N_HEADER_VALUE},
-                timeout=20,
-            )
-            st.success(f"Webhook called (status {resp.status_code})")
-            ctype = resp.headers.get("content-type", "")
-            if "application/json" in ctype:
-                st.json(resp.json())
-            else:
-                st.code((resp.text or "(empty body)")[:4000])
-        except requests.RequestException as e:
-            st.error(f"Request failed: {e}")
+# st.subheader("Trigger n8n workflow")
+# if st.button("Run n8n workflow"):
+#     with st.spinner("Triggering workflow..."):
+#         try:
+#             resp = requests.post(
+#                 WEBHOOK_URL,
+#                 headers={N8N_HEADER_NAME: N8N_HEADER_VALUE},
+#                 timeout=20,
+#             )
+#             st.success(f"Webhook called (status {resp.status_code})")
+#             ctype = resp.headers.get("content-type", "")
+#             if "application/json" in ctype:
+#                 st.json(resp.json())
+#             else:
+#                 st.code((resp.text or "(empty body)")[:4000])
+#         except requests.RequestException as e:
+#             st.error(f"Request failed: {e}")
 
-st.divider()
+# st.divider()
 # ── Supabase setup ─────────────────────────────────────────────────────────────
 @st.cache_resource
 def init_supabase() -> Client:
@@ -198,3 +203,67 @@ if st.button("Load summaries", type="primary", use_container_width=True):
                     st.caption("No organic results found in SERP payload.")
 
         st.success(f"Rendered {len(rows)} row(s).")
+
+# ── Keyword Research Workflow ─────────────────────────────────────────────────
+def perform_analysis(keyword):
+    """Perform keyword research analysis."""
+    if 'words_to_check' not in st.session_state:
+        st.session_state['words_to_check'] = []
+
+    start_time = time.time()
+    user_email = st.session_state.get("username", "guest")
+
+    status_placeholder = st.empty()
+    status_placeholder.info('Retrieving top search results...')
+    st.write(f"Keyword: {keyword}")
+
+    st.session_state['keyword'] = keyword
+    st.session_state['serp_contents'] = []
+
+    api_key = os.getenv("API_KEY")
+    cse_id = os.getenv("CSE_ID")
+    st.write(f"API Key: {api_key}, CSE ID: {cse_id}")
+
+    # Simulate retrieving search results (replace with actual implementation)
+    results = [{"link": f"https://example.com/{i}"} for i in range(1, 6)]
+    st.write(f"Search results: {results}")
+    if not results:
+        status_placeholder.error('No results found.')
+        return
+
+    top_urls = [item['link'] for item in results if 'link' in item]
+    st.write(f"Top URLs: {top_urls}")
+    if not top_urls:
+        status_placeholder.error('No URLs found.')
+        return
+    st.session_state['top_urls'] = top_urls
+
+    # Simulate content extraction (replace with actual implementation)
+    retrieved_content = ["Sample content from URL"] * len(top_urls)
+    st.session_state['serp_contents'] = [{"url": url, "content": content} for url, content in zip(top_urls, retrieved_content)]
+
+    # Simulate TF-IDF analysis (replace with actual implementation)
+    terms = ["term1", "term2", "term3"]
+    scores = [0.8, 0.6, 0.4]
+    st.session_state['chart_data'] = pd.DataFrame({
+        'Terms': terms,
+        'Scores': scores
+    })
+
+    st.success(f"Analysis completed for keyword: {keyword}")
+    elapsed_time = time.time() - start_time
+    st.write(f"Time taken: {elapsed_time:.2f} seconds")
+
+# ── Add Keyword Research Section ──────────────────────────────────────────────
+st.subheader("Keyword Research Workflow")
+keyword = st.text_input("Enter a keyword for research", placeholder="e.g., AI tools")
+if st.button("Analyze Keyword"):
+    if keyword.strip():
+        perform_analysis(keyword.strip())
+    else:
+        st.error("Please enter a valid keyword.")
+
+# Display analysis results
+if 'chart_data' in st.session_state:
+    st.subheader("Keyword Analysis Results")
+    st.dataframe(st.session_state['chart_data'], use_container_width=True)
