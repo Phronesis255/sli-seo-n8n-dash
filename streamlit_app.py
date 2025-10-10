@@ -14,16 +14,12 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 
 st.set_page_config(page_title="n8n + Supabase Demo", page_icon="⚡")
-st.title("n8n trigger + Supabase table")
 
 
 WEBHOOK_URL = "https://phr0nesis.app.n8n.cloud/webhook/25d396ce-f3ff-4376-996f-3e26bc73edb2s-test/25d396ce-f3ff-4376-996f-3e26bc73edb2"
 
 username = st.secrets["username"]
 password = st.secrets["password"]
-
-st.subheader("Trigger n8n workflow")
-st.write("Press the button to call the webhook and run the workflow.")
 
 # if st.button("Run workflow"):
 #     with st.spinner("Triggering workflow..."):
